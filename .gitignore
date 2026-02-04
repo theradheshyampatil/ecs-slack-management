@@ -2,22 +2,33 @@
 .terraform/
 *.tfstate
 *.tfstate.*
+*.tfstate.backup
 .terraform.lock.hcl
 
-# Sensitive files
-terraform.tfvars
-*.pem
-*.key
+# IMPORTANT: Never commit this file!
+terraform/terraform.tfvars
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
+lambda/*.zip
 
-# OS
-.DS_Store
-Thumbs.db
+# Secrets
+.env
+*.pem
+*.key
 
 # IDE
 .vscode/
 .idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# Build
+build/

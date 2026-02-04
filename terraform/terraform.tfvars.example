@@ -1,0 +1,74 @@
+# ============================================
+# ECS Slack Management - Configuration
+# ============================================
+# Copy this file to terraform.tfvars and fill in your values
+# NEVER commit terraform.tfvars to git!
+
+# --------------------------------------------
+# Project Configuration
+# --------------------------------------------
+project_name = "ecs-slack-mgmt"    # Prefix for all AWS resources
+environment  = "production"         # Environment name (production/staging/dev)
+aws_region   = "ap-south-1"        # AWS region where resources will be created
+
+# --------------------------------------------
+# Slack Configuration
+# --------------------------------------------
+# Get your Signing Secret from:
+# https://api.slack.com/apps → Your App → Basic Information → Signing Secret
+slack_signing_secret = "YOUR_SLACK_SIGNING_SECRET_HERE"
+
+# --------------------------------------------
+# Email Notifications
+# --------------------------------------------
+# List of email addresses to receive notifications
+# These emails will be notified when protected clusters are modified
+notification_emails = [
+  "devops@example.com",
+  "oncall@example.com"
+]
+
+# --------------------------------------------
+# ECS Clusters and Services Configuration
+# --------------------------------------------
+# Define your ECS clusters and services
+# Format:
+#   "cluster-name" = {
+#     services  = ["service1", "service2", ...]
+#     protected = true/false  # true = send email on restart
+#   }
+
+ecs_clusters = {
+  "my-demo-app-cluster" = {
+    services  = ["my-demo-app-service"]
+    protected = true
+  }
+  
+  # Example: Production Cluster (email notifications enabled)
+  # "production-cluster" = {
+  #   services  = ["api-service", "worker-service", "web-service"]
+  #   protected = true
+  # }
+  
+  # Example: Staging Cluster (no email notifications)
+  # "staging-cluster" = {
+  #   services  = ["staging-api"]
+  #   protected = false
+  # }
+}
+
+# --------------------------------------------
+# Optional: Lambda Function Settings
+# --------------------------------------------
+lambda_memory_size = 512    # MB (128-10240)
+lambda_timeout     = 30     # Seconds (1-900)
+
+# --------------------------------------------
+# Optional: API Gateway Settings
+# --------------------------------------------
+api_rate_limit = 50         # Requests per second (default: 50)
+
+# --------------------------------------------
+# Optional: Monitoring Settings
+# --------------------------------------------
+enable_xray = true          # Enable AWS X-Ray tracing for debugging
