@@ -1,0 +1,377 @@
+import json
+import boto3
+import os
+import hmac
+import hashlib
+import time
+from datetime import datetime
+from urllib.parse import parse_qs
+from typing import Dict, Any, Optional
+
+# Initialize AWS clients
+ecs = boto3.client('ecs')
+cloudwatch = boto3.client('cloudwatch')
+sns = boto3.client('sns')
+
+# Environment variables
+SLACK_SIGNING_SECRET = os.environ.get('SLACK_SIGNING_SECRET', '')
+SNS_TOPIC_ARN = os.environ.get('SNS_TOPIC_ARN', '')
+PROTECTED_CLUSTERS = os.environ.get('PROTECTED_CLUSTERS', '').split(',')
+AWS_REGION = os.environ.get('AWS_REGION', 'ap-south-1')
+
+def lambda_handler(event, context):
+    """Main Lambda handler for Slack ECS management commands"""
+    
+    try:
+        # Verify Slack signature
+        if not verify_slack_signature(event):
+            return {
+                'statusCode': 401,
+                'body': json.dumps({'text': '❌ Unauthorized: Invalid signature'})
+            }
+        
+        # Parse request body
+        body = event.get('body', '')
+        params = parse_qs(body)
+        
+        # Extract Slack user info
+        user_name = params.get('user_name', ['unknown'])[0]
+        user_id = params.get('user_id', ['unknown'])[0]
+        channel_id = params.get('channel_id', ['unknown'])[0]
+        command_text = params.get('text', [''])[0].strip()
+        
+        print(f"Command received from {user_name} ({user_id}): {command_text}")
+        
+        # Parse command with underscore format
+        parsed = parse_command(command_text)
+        
+        if parsed.get('help'):
+            return create_response(get_help_text())
+        
+        # Validate required parameters
+        cluster = parsed.get('cluster')
+        service = parsed.get('service')
+        action = parsed.get('action', 'status')
+        
+        if not cluster or not service:
+            return create_response(
+                "❌ Missing required parameters!\n\n"
+                "Usage: `/ecs-status_cluster=<name>_service=<name>_action=<status|restart>`\n\n"
+                "Example: `/ecs-status_cluster=my-demo-app-cluster_service=my-demo-app-service`"
+            )
+        
+        # Execute action
+        if action == 'status':
+            response_text = get_service_status(cluster, service)
+        elif action == 'restart':
+            response_text = restart_service(cluster, service, user_name)
+        else:
+            response_text = f"❌ Unknown action: {action}. Use 'status' or 'restart'"
+        
+        return create_response(response_text)
+        
+    except Exception as e:
+        error_msg = f"❌ Error: {str(e)}"
+        print(f"Error processing command: {str(e)}")
+        return create_response(error_msg)
+
+
+def parse_command(command_text: str) -> Dict[str, str]:
+    """Parse command with underscore-separated parameters"""
+    
+    if not command_text or command_text.lower() == 'help':
+        return {'help': True}
+    
+    result = {}
+    
+    # Split by underscore
+    parts = command_text.split('_')
+    
+    for part in parts:
+        if '=' in part:
+            key, value = part.split('=', 1)
+            result[key.strip().lower()] = value.strip()
+    
+    return result
+
+
+def verify_slack_signature(event: Dict[str, Any]) -> bool:
+    """Verify Slack request signature for security"""
+    
+    if not SLACK_SIGNING_SECRET:
+        print("Warning: SLACK_SIGNING_SECRET not configured")
+        return True  # Allow in development
+    
+    headers = event.get('headers', {})
+    slack_signature = headers.get('X-Slack-Signature', headers.get('x-slack-signature', ''))
+    slack_timestamp = headers.get('X-Slack-Request-Timestamp', headers.get('x-slack-request-timestamp', ''))
+    
+    if not slack_signature or not slack_timestamp:
+        return False
+    
+    # Prevent replay attacks (request older than 5 minutes)
+    if abs(time.time() - int(slack_timestamp)) > 60 * 5:
+        return False
+    
+    # Compute signature
+    body = event.get('body', '')
+    sig_basestring = f"v0:{slack_timestamp}:{body}"
+    my_signature = 'v0=' + hmac.new(
+        SLACK_SIGNING_SECRET.encode(),
+        sig_basestring.encode(),
+        hashlib.sha256
+    ).hexdigest()
+    
+    return hmac.compare_digest(my_signature, slack_signature)
+
+
+def get_service_status(cluster: str, service: str) -> str:
+    """Get comprehensive ECS service status"""
+    
+    try:
+        # Get service details
+        response = ecs.describe_services(
+            cluster=cluster,
+            services=[service],
+            include=['TAGS']
+        )
+        
+        if not response['services']:
+            return f"❌ Service '{service}' not found in cluster '{cluster}'"
+        
+        svc = response['services'][0]
+        
+        # Build status response
+        status_lines = [
+            f"📊 **ECS Service Status: {service}**",
+            "",
+            f"**Cluster:** `{cluster}`",
+            f"**Status:** {svc['status']}",
+            f"**Launch Type:** {svc.get('launchType', 'N/A')}",
+            "",
+            f"**Tasks:**",
+            f"  • Desired: {svc['desiredCount']}",
+            f"  • Running: {svc['runningCount']}",
+            f"  • Pending: {svc['pendingCount']}",
+            "",
+        ]
+        
+        # Deployment info
+        deployments = svc.get('deployments', [])
+        if deployments:
+            primary = deployments[0]
+            status_lines.extend([
+                f"**Deployment:**",
+                f"  • Status: {primary['status']}",
+                f"  • Task Definition: {primary['taskDefinition'].split('/')[-1]}",
+                f"  • Updated: {primary.get('updatedAt', 'N/A')}",
+                "",
+            ])
+        
+        # Get CPU and Memory utilization
+        try:
+            metrics = get_service_metrics(cluster, service)
+            if metrics:
+                status_lines.extend([
+                    f"**Metrics:**",
+                    f"  • CPU: {metrics.get('cpu', 'N/A')}%",
+                    f"  • Memory: {metrics.get('memory', 'N/A')}%",
+                    "",
+                ])
+        except Exception as e:
+            print(f"Could not fetch metrics: {e}")
+        
+        # Get running tasks
+        tasks_response = ecs.list_tasks(
+            cluster=cluster,
+            serviceName=service,
+            desiredStatus='RUNNING',
+            maxResults=5
+        )
+        
+        if tasks_response['taskArns']:
+            task_details = ecs.describe_tasks(
+                cluster=cluster,
+                tasks=tasks_response['taskArns']
+            )
+            
+            status_lines.append("**Running Tasks:**")
+            for task in task_details['tasks'][:5]:
+                task_id = task['taskArn'].split('/')[-1][:8]
+                task_status = task['lastStatus']
+                health = task.get('healthStatus', 'UNKNOWN')
+                started = task.get('startedAt', 'N/A')
+                status_lines.append(f"  • `{task_id}` - {task_status} ({health}) - Started: {started}")
+            status_lines.append("")
+        
+        # Recent events
+        events = svc.get('events', [])[:3]
+        if events:
+            status_lines.append("**Recent Events:**")
+            for event in events:
+                created = event['createdAt'].strftime('%Y-%m-%d %H:%M:%S')
+                message = event['message'][:100]
+                status_lines.append(f"  • [{created}] {message}")
+        
+        return '\n'.join(status_lines)
+        
+    except Exception as e:
+        return f"❌ Error getting service status: {str(e)}"
+
+
+def get_service_metrics(cluster: str, service: str) -> Dict[str, float]:
+    """Get CloudWatch metrics for service"""
+    
+    try:
+        end_time = datetime.utcnow()
+        start_time = datetime.utcfromtimestamp(end_time.timestamp() - 300)  # Last 5 minutes
+        
+        metrics = {}
+        
+        # Get CPU utilization
+        cpu_response = cloudwatch.get_metric_statistics(
+            Namespace='AWS/ECS',
+            MetricName='CPUUtilization',
+            Dimensions=[
+                {'Name': 'ServiceName', 'Value': service},
+                {'Name': 'ClusterName', 'Value': cluster}
+            ],
+            StartTime=start_time,
+            EndTime=end_time,
+            Period=300,
+            Statistics=['Average']
+        )
+        
+        if cpu_response['Datapoints']:
+            metrics['cpu'] = round(cpu_response['Datapoints'][0]['Average'], 1)
+        
+        # Get Memory utilization
+        mem_response = cloudwatch.get_metric_statistics(
+            Namespace='AWS/ECS',
+            MetricName='MemoryUtilization',
+            Dimensions=[
+                {'Name': 'ServiceName', 'Value': service},
+                {'Name': 'ClusterName', 'Value': cluster}
+            ],
+            StartTime=start_time,
+            EndTime=end_time,
+            Period=300,
+            Statistics=['Average']
+        )
+        
+        if mem_response['Datapoints']:
+            metrics['memory'] = round(mem_response['Datapoints'][0]['Average'], 1)
+        
+        return metrics
+        
+    except Exception as e:
+        print(f"Error fetching metrics: {e}")
+        return {}
+
+
+def restart_service(cluster: str, service: str, user_name: str) -> str:
+    """Restart ECS service by forcing new deployment"""
+    
+    try:
+        # Check if cluster is protected
+        if cluster in PROTECTED_CLUSTERS:
+            send_notification(cluster, service, user_name, 'restart')
+        
+        # Force new deployment
+        response = ecs.update_service(
+            cluster=cluster,
+            service=service,
+            forceNewDeployment=True
+        )
+        
+        svc = response['service']
+        
+        result = [
+            f"✅ **Service Restart Initiated**",
+            "",
+            f"**Service:** `{service}`",
+            f"**Cluster:** `{cluster}`",
+            f"**Initiated by:** @{user_name}",
+            f"**Time:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC",
+            "",
+            f"**Current State:**",
+            f"  • Status: {svc['status']}",
+            f"  • Desired: {svc['desiredCount']}",
+            f"  • Running: {svc['runningCount']}",
+            "",
+            "Monitor progress using: `/ecs-status_cluster={}_service={}`".format(cluster, service)
+        ]
+        
+        return '\n'.join(result)
+        
+    except Exception as e:
+        return f"❌ Error restarting service: {str(e)}"
+
+
+def send_notification(cluster: str, service: str, user_name: str, action: str):
+    """Send SNS notification for protected cluster operations"""
+    
+    if not SNS_TOPIC_ARN:
+        return
+    
+    try:
+        message = f"""
+ECS Service Action Alert
+
+Action: {action.upper()}
+Cluster: {cluster}
+Service: {service}
+User: {user_name}
+Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
+Region: {AWS_REGION}
+
+This is an automated notification for operations on protected ECS clusters.
+"""
+        
+        sns.publish(
+            TopicArn=SNS_TOPIC_ARN,
+            Subject=f'ECS Action: {action} on {service}',
+            Message=message
+        )
+        
+    except Exception as e:
+        print(f"Error sending notification: {e}")
+
+
+def get_help_text() -> str:
+    """Return help text for the command"""
+    
+    return """
+📖 **ECS Management Commands**
+
+**View Service Status:**
+`/ecs-status_cluster=<cluster-name>_service=<service-name>`
+
+**Restart Service:**
+`/ecs-status_cluster=<cluster-name>_service=<service-name>_action=restart`
+
+**Examples:**
+• `/ecs-status_cluster=my-demo-app-cluster_service=my-demo-app-service`
+• `/ecs-status_cluster=production_service=api-service_action=restart`
+
+**Parameters:**
+• `cluster` - ECS cluster name (required)
+• `service` - ECS service name (required)
+• `action` - Action to perform: status (default) or restart
+
+**Help:**
+`/ecs-status help`
+"""
+
+
+def create_response(text: str) -> Dict[str, Any]:
+    """Create Slack response"""
+    
+    return {
+        'statusCode': 200,
+        'headers': {'Content-Type': 'application/json'},
+        'body': json.dumps({
+            'response_type': 'ephemeral',
+            'text': text
+        })
+    }

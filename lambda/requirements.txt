@@ -1,0 +1,9 @@
+# ============================================================================
+# Lambda Dependencies for ECS Slack Management System
+# ============================================================================
+# These packages are installed in the Lambda deployment package
+# No user configuration needed - all managed by Terraform
+# ============================================================================
+
+boto3>=1.26.0       # AWS SDK - ECS, CloudWatch, SNS operations
+requests>=2.28.0    # HTTP library for external API calls (if needed)
