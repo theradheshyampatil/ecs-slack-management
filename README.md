@@ -1,4 +1,4 @@
-# 🚀 ECS Slack Management System
+# 🚀 ECS Slack Management System.
 
 [![Terraform](https://img.shields.io/badge/Terraform-v1.7+-623CE4?logo=terraform)](https://www.terraform.io/)
 [![AWS](https://img.shields.io/badge/AWS-Lambda%20%7C%20ECS-FF9900?logo=amazon-aws)](https://aws.amazon.com/)
