@@ -7,7 +7,7 @@
 
 Enterprise-grade AWS ECS service management through Slack slash commands. Built with Infrastructure as Code principles for production reliability.
 
----
+-----
 
 ## 🎯 Executive Summary
 
