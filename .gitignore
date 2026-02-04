@@ -1,34 +1,75 @@
-# Terraform
-.terraform/
-*.tfstate
-*.tfstate.*
-*.tfstate.backup
-.terraform.lock.hcl
+# ============================================
+# SECRETS & SENSITIVE FILES - NEVER COMMIT!
+# ============================================
 
-# IMPORTANT: Never commit this file!
+# Terraform sensitive files
 terraform/terraform.tfvars
+terraform/*.tfvars
+terraform/terraform.tfvars.backup
+terraform/*.backup
+terraform/terraform.tfstate
+terraform/terraform.tfstate.*
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/crash.log
+terraform/override.tf
+terraform/override.tf.json
+terraform/*_override.tf
+terraform/*_override.tf.json
+
+# Backup files
+*.backup
+*.bak
+*~
+.DS_Store
+
+# Build artifacts
+build/
+dist/
+*.zip
+lambda/package/
 
 # Python
 __pycache__/
-*.pyc
-*.pyo
-lambda/*.zip
-
-# Secrets
-.env
-*.pem
-*.key
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
 
 # IDE
 .vscode/
 .idea/
 *.swp
-*~
+*.swo
 
-# OS
-.DS_Store
-Thumbs.db
+# Logs
 *.log
+logs/
 
-# Build
-build/
+# Temporary files
+tmp/
+temp/
+.tmp/
+
+# AWS credentials
+.aws/
+credentials
+
+# Local environment variables
+.env
+.env.local
+.env.*
+
+# Deployment records
+deployment-outputs.txt
+.ecs-slack-deployment
+.ecs-slack-secret
+.ecs-slack-new-secret
+
+# OS generated files
+Thumbs.db
