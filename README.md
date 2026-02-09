@@ -738,8 +738,7 @@ Radheshyam Patil
 
 🐙 GitHub: @theradheshyampatil
 
-💼 LinkedIn: Radheshyam Patil
-
+💼 LinkedIn: @theradheshyampatil
 🙏 Acknowledgments
 AWS for providing robust cloud infrastructure
 
